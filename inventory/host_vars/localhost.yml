@@ -1,0 +1,6 @@
+---
+# Applies to the implicit `localhost` (the Fedora host) without adding it to
+# the `all` group. With connection: local, the "remote" is the host itself,
+# so module temp files would otherwise land in ~/.ansible/tmp (CLAUDE.md rule 2).
+ansible_connection: local
+ansible_remote_tmp: "{{ playbook_dir | dirname }}/.ansible/remote_tmp"

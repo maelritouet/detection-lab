@@ -1,0 +1,13 @@
+---
+# Template for inventory/group_vars/all/vault.yml (which must be encrypted).
+#
+#   mkdir -p .secrets && openssl rand -base64 32 > .secrets/vault-pass && chmod 600 .secrets/vault-pass
+#   cp inventory/vault.example.yml inventory/group_vars/all/vault.yml
+#   # edit the values, then:
+#   .venv/bin/ansible-vault encrypt --vault-password-file .secrets/vault-pass inventory/group_vars/all/vault.yml
+#
+# This file sits outside group_vars on purpose, so Ansible never loads it.
+
+vault_wazuh_enrollment_password: "CHANGE_ME"
+# vault_wazuh_admin_password is written here by phase 4
+# (taken from the installer's generated wazuh-install-files.tar).

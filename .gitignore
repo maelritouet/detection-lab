@@ -1,0 +1,14 @@
+# Local tooling and state
+.venv/
+collections/
+.ansible/
+tmp/
+
+# Downloads and secrets
+images/
+.secrets/
+.ssh/
+*.retry
+
+# Wazuh installer artifacts
+wazuh-install-files.tar

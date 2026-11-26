@@ -1,0 +1,37 @@
+---
+# --- libvirt ---------------------------------------------------------------
+libvirt_uri: qemu:///system
+libvirt_pool: default
+libvirt_pool_path: /var/lib/libvirt/images   # managed only via the libvirt API
+
+# --- Lab network -----------------------------------------------------------
+lab_network_name: detlab
+lab_bridge: virbr-detlab
+lab_network_cidr: 10.10.10.0/24
+lab_gateway: 10.10.10.1
+lab_netmask: 255.255.255.0
+# Dynamic range for anything not in the inventory; reserved IPs sit below it.
+lab_dhcp_start: 10.10.10.100
+lab_dhcp_end: 10.10.10.199
+
+# --- Guest defaults --------------------------------------------------------
+lab_user: lab
+lab_timezone: Etc/UTC   # UTC everywhere keeps event timelines comparable
+
+# --- Ubuntu 24.04 cloud image (pinned) -------------------------------------
+# Source: https://cloud-images.ubuntu.com/releases/noble/release-20261017/SHA256SUMS
+ubuntu_image_release: "20261017"
+ubuntu_image_file: ubuntu-24.04-server-cloudimg-amd64.img
+ubuntu_image_url: "https://cloud-images.ubuntu.com/releases/noble/release-{{ ubuntu_image_release }}/{{ ubuntu_image_file }}"
+ubuntu_image_sha256: 04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94
+ubuntu_base_volume: "detlab-ubuntu-2404-{{ ubuntu_image_release }}-base.qcow2"
+
+# --- Wazuh (pinned) --------------------------------------------------------
+# 4.14.10 released 2026-11-05. Agents must never be newer than the manager.
+wazuh_version: "4.14.10"
+wazuh_minor: "{{ wazuh_version.split('.')[0:2] | join('.') }}"
+wazuh_installer_url: "https://packages.wazuh.com/{{ wazuh_minor }}/wazuh-install.sh"
+wazuh_manager_ip: "{{ hostvars['wazuh-server'].lab_ip }}"
+
+# --- Secrets (defined in vault.yml; see inventory/vault.example.yml) -------
+wazuh_enrollment_password: "{{ vault_wazuh_enrollment_password }}"

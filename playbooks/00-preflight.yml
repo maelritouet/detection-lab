@@ -1,0 +1,128 @@
+---
+# Phase 1: read-only checks on the Fedora host.
+# Changes nothing, creates nothing, never escalates privileges.
+- name: Preflight checks on the lab host
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: true
+  gather_subset: [hardware]
+
+  vars:
+    required_commands: [virsh, virt-install, qemu-img, xorriso]
+    lab_ram_needed_mib: "{{ groups['lab_vms'] | map('extract', hostvars, 'vm_memory_mib') | map('int') | sum }}"
+    lab_disk_virtual_gib: "{{ groups['lab_vms'] | map('extract', hostvars, 'vm_disk_gib') | map('int') | sum }}"
+
+  tasks:
+    # --- Probes (never fail here; the verdict comes at the end) -------------
+    - name: Check required commands are on PATH
+      ansible.builtin.shell: "command -v {{ item }}"
+      loop: "{{ required_commands }}"
+      register: preflight_cmds
+      changed_when: false
+      failed_when: false
+
+    - name: Check Python can import libvirt and lxml
+      ansible.builtin.command:
+        argv: ["{{ ansible_playbook_python }}", "-c", "import libvirt, lxml"]
+      register: preflight_pylibs
+      changed_when: false
+      failed_when: false
+
+    - name: Check libvirt is reachable without sudo
+      ansible.builtin.command:
+        argv: [virsh, -c, "{{ libvirt_uri }}", version]
+      register: preflight_virsh
+      changed_when: false
+      failed_when: false
+
+    - name: Look for an existing lab network
+      ansible.builtin.command:
+        argv: [virsh, -c, "{{ libvirt_uri }}", net-info, "{{ lab_network_name }}"]
+      register: preflight_net
+      changed_when: false
+      failed_when: false
+
+    - name: Look for the libvirt storage pool
+      ansible.builtin.command:
+        argv: [virsh, -c, "{{ libvirt_uri }}", pool-info, "{{ libvirt_pool }}"]
+      register: preflight_pool
+      changed_when: false
+      failed_when: false
+
+    - name: Check free space where VM disks will live
+      ansible.builtin.command:
+        argv: [df, --output=avail, -B1, "{{ libvirt_pool_path }}"]
+      register: preflight_df
+      changed_when: false
+      failed_when: false
+
+    - name: Find host routes overlapping the lab subnet (Docker, Podman, VPN...)
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - -c
+          # Reads the kernel table directly: no dependency on iproute being installed.
+          - |
+            import ipaddress, json, socket, struct, sys
+            lab, bridge = ipaddress.ip_network(sys.argv[1]), sys.argv[2]
+            ip = lambda h: socket.inet_ntoa(struct.pack("<I", int(h, 16)))
+            hits = []
+            with open("/proc/net/route") as f:
+                next(f)  # header
+                for line in f:
+                    iface, dst, _gw, _fl, _ref, _use, _met, mask = line.split()[:8]
+                    net = ipaddress.ip_network(f"{ip(dst)}/{ip(mask)}", strict=False)
+                    if net.prefixlen and iface != bridge and net.overlaps(lab):
+                        hits.append({"dst": str(net), "dev": iface})
+            print(json.dumps(hits))
+          - "{{ lab_network_cidr }}"
+          - "{{ lab_bridge }}"
+      register: preflight_routes
+      changed_when: false
+      failed_when: false
+
+    # --- Verdict ------------------------------------------------------------
+    - name: Summarise findings
+      ansible.builtin.set_fact:
+        preflight_missing_cmds: "{{ preflight_cmds.results | rejectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
+        preflight_overlaps: "{{ preflight_routes.stdout | default('[]', true) | from_json }}"
+        preflight_free_ram_mib: "{{ ansible_facts.memory_mb.nocache.free | int }}"
+        preflight_free_disk_gib: "{{ ((preflight_df.stdout_lines | last | int) / 1024 ** 3) | round(1) if preflight_df.rc == 0 else -1 }}"
+
+    - name: Build lists of errors and warnings
+      ansible.builtin.set_fact:
+        preflight_errors: >-
+          {{
+            (['Missing commands: ' ~ (preflight_missing_cmds | join(', ')) ~ '. See docs/host-setup.md step 1.'] if preflight_missing_cmds else [])
+            + (['Python cannot import libvirt/lxml. Install python3-libvirt python3-lxml, then recreate .venv (make clean-venv venv).'] if preflight_pylibs.rc != 0 else [])
+            + (['Cannot reach ' ~ libvirt_uri ~ ' without sudo. Join the libvirt group and log out/in (docs/host-setup.md step 3).'] if preflight_virsh.rc != 0 else [])
+            + (['Could not inspect host routes: ' ~ (preflight_routes.stderr | default('', true) | trim)] if preflight_routes.rc != 0 else [])
+            + (['Host routes overlap ' ~ lab_network_cidr ~ ': ' ~ (preflight_overlaps | map(attribute='dst') | join(', ')) ~ '. Pick another lab subnet or remove the conflict.'] if preflight_overlaps else [])
+          }}
+        preflight_warnings: >-
+          {{
+            (['Free RAM ' ~ preflight_free_ram_mib ~ ' MiB < ' ~ lab_ram_needed_mib ~ ' MiB the lab VMs need. Close other workloads before booting all VMs.'] if (preflight_free_ram_mib | int) < (lab_ram_needed_mib | int) else [])
+            + (['Free space at ' ~ libvirt_pool_path ~ ' is ' ~ preflight_free_disk_gib ~ ' GiB, below the ' ~ lab_disk_virtual_gib ~ ' GiB the VM disks could grow to (thin-provisioned, so this is OK for now).'] if (preflight_free_disk_gib | float) >= 0 and (preflight_free_disk_gib | float) < (lab_disk_virtual_gib | float) else [])
+          }}
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "libvirt reachable:  {{ 'yes' if preflight_virsh.rc == 0 else 'NO' }}"
+          - "lab network '{{ lab_network_name }}': {{ 'already defined' if preflight_net.rc == 0 else 'not defined yet (phase 2 creates it)' }}"
+          - "storage pool '{{ libvirt_pool }}': {{ 'present' if preflight_pool.rc == 0 else 'missing (phase 2 creates it)' }}"
+          - "RAM free / needed:  {{ preflight_free_ram_mib }} / {{ lab_ram_needed_mib }} MiB"
+          - "Disk free / max:    {{ preflight_free_disk_gib if (preflight_free_disk_gib | float) >= 0 else 'unknown' }} / {{ lab_disk_virtual_gib }} GiB"
+          - "Errors:   {{ preflight_errors | length }}"
+          - "Warnings: {{ preflight_warnings | length }}"
+
+    - name: Warnings
+      ansible.builtin.debug:
+        msg: "{{ preflight_warnings }}"
+      when: preflight_warnings | length > 0
+
+    - name: Fail on blocking problems
+      ansible.builtin.fail:
+        msg: "{{ preflight_errors }}"
+      when: preflight_errors | length > 0
