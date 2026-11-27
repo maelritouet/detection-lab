@@ -29,12 +29,25 @@
       changed_when: false
       failed_when: false
 
+    # Without the libvirt group, polkit pops an admin-password dialog on the
+    # user's desktop for EVERY libvirt connection. That's host privilege
+    # elevation (CLAUDE.md rule 3), so no libvirt call runs until it's fixed.
+    - name: Check the user is in the libvirt group
+      ansible.builtin.command: id -nG
+      register: preflight_groups
+      changed_when: false
+
+    - name: Record libvirt group membership
+      ansible.builtin.set_fact:
+        preflight_in_libvirt: "{{ 'libvirt' in preflight_groups.stdout.split() }}"
+
     - name: Check libvirt is reachable without sudo
       ansible.builtin.command:
         argv: [virsh, -c, "{{ libvirt_uri }}", version]
       register: preflight_virsh
       changed_when: false
       failed_when: false
+      when: preflight_in_libvirt
 
     - name: Look for an existing lab network
       ansible.builtin.command:
@@ -42,6 +55,7 @@
       register: preflight_net
       changed_when: false
       failed_when: false
+      when: preflight_in_libvirt
 
     - name: Look for the libvirt storage pool
       ansible.builtin.command:
@@ -49,6 +63,7 @@
       register: preflight_pool
       changed_when: false
       failed_when: false
+      when: preflight_in_libvirt
 
     - name: Check free space where VM disks will live
       ansible.builtin.command:
@@ -96,7 +111,8 @@
           {{
             (['Missing commands: ' ~ (preflight_missing_cmds | join(', ')) ~ '. See docs/host-setup.md step 1.'] if preflight_missing_cmds else [])
             + (['Python cannot import libvirt/lxml. Install python3-libvirt python3-lxml, then recreate .venv (make clean-venv venv).'] if preflight_pylibs.rc != 0 else [])
-            + (['Cannot reach ' ~ libvirt_uri ~ ' without sudo. Join the libvirt group and log out/in (docs/host-setup.md step 3).'] if preflight_virsh.rc != 0 else [])
+            + (['Not in the libvirt group: every libvirt call would trigger a polkit admin-password prompt. Run `sudo usermod -aG libvirt $USER`, then log out/in (docs/host-setup.md step 3). libvirt checks were skipped.'] if not preflight_in_libvirt else [])
+            + (['Cannot reach ' ~ libvirt_uri ~ ' without sudo. Join the libvirt group and log out/in (docs/host-setup.md step 3).'] if preflight_in_libvirt and (preflight_virsh.rc | default(1)) != 0 else [])
             + (['Could not inspect host routes: ' ~ (preflight_routes.stderr | default('', true) | trim)] if preflight_routes.rc != 0 else [])
             + (['Host routes overlap ' ~ lab_network_cidr ~ ': ' ~ (preflight_overlaps | map(attribute='dst') | join(', ')) ~ '. Pick another lab subnet or remove the conflict.'] if preflight_overlaps else [])
           }}
@@ -109,9 +125,10 @@
     - name: Report
       ansible.builtin.debug:
         msg:
-          - "libvirt reachable:  {{ 'yes' if preflight_virsh.rc == 0 else 'NO' }}"
-          - "lab network '{{ lab_network_name }}': {{ 'already defined' if preflight_net.rc == 0 else 'not defined yet (phase 2 creates it)' }}"
-          - "storage pool '{{ libvirt_pool }}': {{ 'present' if preflight_pool.rc == 0 else 'missing (phase 2 creates it)' }}"
+          - "libvirt group:      {{ 'yes' if preflight_in_libvirt else 'NO (libvirt checks skipped)' }}"
+          - "libvirt reachable:  {{ 'yes' if (preflight_virsh.rc | default(1)) == 0 else 'NO' }}"
+          - "lab network '{{ lab_network_name }}': {{ 'already defined' if (preflight_net.rc | default(1)) == 0 else 'not defined yet (phase 2 creates it)' }}"
+          - "storage pool '{{ libvirt_pool }}': {{ 'present' if (preflight_pool.rc | default(1)) == 0 else 'missing (phase 2 creates it)' }}"
           - "RAM free / needed:  {{ preflight_free_ram_mib }} / {{ lab_ram_needed_mib }} MiB"
           - "Disk free / max:    {{ preflight_free_disk_gib if (preflight_free_disk_gib | float) >= 0 else 'unknown' }} / {{ lab_disk_virtual_gib }} GiB"
           - "Errors:   {{ preflight_errors | length }}"

@@ -24,7 +24,9 @@ sudo systemctl enable --now virtqemud.socket virtnetworkd.socket virtstoraged.so
   virtnodedevd.socket virtnwfilterd.socket virtsecretd.socket
 ```
 
-## 3. Let your user manage libvirt without sudo
+## 3. Let your user manage libvirt without sudo or password prompts
+
+Required. Without it, polkit still lets `wheel` members in, but **asks for the admin password on every libvirt connection** (each `virsh` call and each Ansible task). The only passwordless rule (`/usr/share/polkit-1/rules.d/50-libvirt.rules`) is for the `libvirt` group.
 
 ```bash
 sudo usermod -aG libvirt "$USER"
@@ -37,7 +39,7 @@ Then **log out and back in**. A new terminal tab isn't enough, and VS Code must 
 ## 4. Verify (no sudo)
 
 ```bash
-id -nG | tr ' ' '\n' | grep -x libvirt          # prints "libvirt"
+id -nG | tr ' ' '\n' | grep -x libvirt          # prints "libvirt" (if not, you haven't logged out/in yet)
 virsh -c qemu:///system version                  # prints library + hypervisor versions
 virt-host-validate qemu                          # every line should be PASS (a WARN about IOMMU is fine)
 ```

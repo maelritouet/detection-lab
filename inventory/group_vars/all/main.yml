@@ -10,6 +10,9 @@ lab_bridge: virbr-detlab
 lab_network_cidr: 10.10.10.0/24
 lab_gateway: 10.10.10.1
 lab_netmask: 255.255.255.0
+# .internal is reserved for private use (ICANN, 2024): it will never resolve publicly.
+# libvirt's dnsmasq answers <vm>.detlab.internal for every DHCP reservation.
+lab_domain: detlab.internal
 # Dynamic range for anything not in the inventory; reserved IPs sit below it.
 lab_dhcp_start: 10.10.10.100
 lab_dhcp_end: 10.10.10.199

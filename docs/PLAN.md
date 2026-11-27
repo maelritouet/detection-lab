@@ -83,10 +83,10 @@ No sudo needed after that:
 - 10.10.10.0/24 doesn't collide with existing routes (Docker, Podman, VPN).
 - Enough free RAM and pool space.
 
-### 2. Network + storage pool (`10-network.yml`)
-**Blocked until CLAUDE.md has the libvirt-objects exception to rule 2.**
-- `community.libvirt.virt_net`: network `detlab`, NAT mode, bridge `virbr-detlab`, DHCP reservations from the inventory, autostart.
-- `community.libvirt.virt_pool`: make sure the `default` dir pool exists at `/var/lib/libvirt/images` (a fresh libvirt install may not have one), autostart.
+### 2. Network + storage pool (`10-network.yml`, `make network`) ✅ done 2026-11-26
+- `community.libvirt.virt_net`: network `detlab`, NAT mode, bridge `virbr-detlab`, DNS domain `detlab.internal`, DHCP reservations from the inventory, autostart.
+- `community.libvirt.virt_pool`: `default` dir pool at `/var/lib/libvirt/images` (this host had none), autostart.
+- Gotcha: `virt_net`/`virt_pool` `command: define` is **create-only**, so later template edits are ignored. DHCP reservations are synced with `command: modify` instead, and the role fails if the live subnet, bridge or forward mode drifts from the inventory.
 
 ### 3. VMs (`20-vms.yml`, role `lab_vm`)
 1. Download the pinned Ubuntu 24.04 cloud image to `images/` and verify it against Canonical's `SHA256SUMS`.

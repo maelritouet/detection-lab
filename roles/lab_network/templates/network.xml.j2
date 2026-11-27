@@ -1,0 +1,15 @@
+<!-- {{ ansible_managed }} -->
+<network>
+  <name>{{ lab_network_name }}</name>
+  <forward mode='nat'/>
+  <bridge name='{{ lab_bridge }}' stp='on' delay='0'/>
+  <domain name='{{ lab_domain }}' localOnly='yes'/>
+  <ip address='{{ lab_gateway }}' netmask='{{ lab_netmask }}'>
+    <dhcp>
+      <range start='{{ lab_dhcp_start }}' end='{{ lab_dhcp_end }}'/>
+{% for vm in groups['lab_vms'] %}
+      <host mac='{{ hostvars[vm].lab_mac }}' name='{{ vm }}' ip='{{ hostvars[vm].lab_ip }}'/>
+{% endfor %}
+    </dhcp>
+  </ip>
+</network>

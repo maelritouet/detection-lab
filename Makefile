@@ -11,7 +11,7 @@ export PIP_NO_CACHE_DIR := 1
 export PIP_DISABLE_PIP_VERSION_CHECK := 1
 export LIBVIRT_DEFAULT_URI := qemu:///system
 
-.PHONY: help venv collections dirs preflight clean-venv
+.PHONY: help venv collections dirs preflight network clean-venv
 
 help: ## Show targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -32,6 +32,9 @@ dirs:
 
 preflight: collections dirs ## Read-only host checks (phase 1)
 	$(ANSIBLE_BIN)/ansible-playbook playbooks/00-preflight.yml $(VAULT_ARGS)
+
+network: collections dirs ## Lab network + storage pool (phase 2)
+	$(ANSIBLE_BIN)/ansible-playbook playbooks/10-network.yml $(VAULT_ARGS)
 
 clean-venv: ## Remove .venv and ./collections
 	rm -rf $(VENV) collections

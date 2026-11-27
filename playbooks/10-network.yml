@@ -1,0 +1,30 @@
+---
+# Phase 2: lab network + storage pool on the Fedora host.
+# Host-side play: never escalates privileges (CLAUDE.md rule 3). Everything
+# goes through the libvirt API as the current user.
+- name: Lab network and storage pool
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  pre_tasks:
+    # Without the libvirt group every libvirt call pops a polkit admin-password
+    # prompt: host privilege elevation (CLAUDE.md rule 3). Refuse to start.
+    - name: Check the user is in the libvirt group
+      ansible.builtin.command: id -nG
+      register: _groups
+      changed_when: false
+
+    - name: Refuse to run without the libvirt group
+      ansible.builtin.assert:
+        that: "'libvirt' in _groups.stdout.split()"
+        fail_msg: >-
+          Not in the libvirt group, so every libvirt call would trigger a polkit
+          password prompt. Run `sudo usermod -aG libvirt $USER`, then log out/in
+          (docs/host-setup.md step 3).
+        quiet: true
+
+  roles:
+    - lab_pool
+    - lab_network

@@ -1,0 +1,52 @@
+---
+# Ensures libvirt's dir-backed storage pool exists, through the libvirt API only.
+# The directory is owned by root and managed by libvirtd; we never touch it
+# directly (CLAUDE.md rule 2, libvirt exception).
+
+- name: Define the storage pool (first run only)
+  community.libvirt.virt_pool:
+    uri: "{{ libvirt_uri }}"
+    command: define
+    name: "{{ libvirt_pool }}"
+    xml: |
+      <pool type='dir'>
+        <name>{{ libvirt_pool }}</name>
+        <target>
+          <path>{{ libvirt_pool_path }}</path>
+        </target>
+      </pool>
+  register: _pool_def
+
+- name: Start the storage pool
+  community.libvirt.virt_pool:
+    uri: "{{ libvirt_uri }}"
+    name: "{{ libvirt_pool }}"
+    state: active
+
+- name: Autostart the storage pool with libvirt
+  community.libvirt.virt_pool:
+    uri: "{{ libvirt_uri }}"
+    name: "{{ libvirt_pool }}"
+    autostart: true
+
+- name: Read the pool's target path
+  community.libvirt.virt_pool:
+    uri: "{{ libvirt_uri }}"
+    command: get_xml
+    name: "{{ libvirt_pool }}"
+  register: _pool_xml
+  changed_when: false
+  # In --check on a fresh host the object only exists on paper.
+  when: not (ansible_check_mode and _pool_def is changed)
+
+- name: Fail if an existing pool points somewhere else
+  ansible.builtin.assert:
+    that:
+      - (_pool_xml.get_xml | regex_search('<path>([^<]+)</path>', '\\1') | first) == libvirt_pool_path
+    fail_msg: >-
+      Pool '{{ libvirt_pool }}' already exists with a different path. Either set
+      libvirt_pool/libvirt_pool_path in inventory/group_vars/all/main.yml to match it,
+      or pick another pool name.
+    quiet: true
+  # In --check on a fresh host the object only exists on paper.
+  when: not (ansible_check_mode and _pool_def is changed)

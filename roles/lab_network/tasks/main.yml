@@ -1,0 +1,92 @@
+---
+# Manages the lab's libvirt NAT network through the libvirt API only.
+#
+# community.libvirt.virt_net `command: define` is create-only: if the network
+# already exists it does nothing. So:
+#   - the full template is applied only on first creation,
+#   - DHCP reservations are kept in sync with `command: modify` (live + config),
+#   - anything else that drifts (subnet, bridge, NAT) fails loudly instead of
+#     being silently ignored.
+
+- name: Validate the address plan in the inventory
+  ansible.builtin.assert:
+    that:
+      - _ips | unique | length == _ips | length
+      - _macs | map('lower') | unique | length == _macs | length
+      - lab_network_cidr.endswith('/24')   # the prefix checks below assume a /24
+      - _ips | select('match', '^' ~ (_prefix | regex_escape) ~ '\.\d+$') | length == _ips | length
+      - _ips | select('in', _dhcp_pool) | length == 0
+      - lab_gateway not in _ips
+    fail_msg: >-
+      Inventory address plan is invalid: IPs and MACs must be unique, inside
+      {{ lab_network_cidr }}, not the gateway, and outside the dynamic range
+      {{ lab_dhcp_start }}-{{ lab_dhcp_end }}.
+    quiet: true
+  vars:
+    _ips: "{{ groups['lab_vms'] | map('extract', hostvars, 'lab_ip') | list }}"
+    _macs: "{{ groups['lab_vms'] | map('extract', hostvars, 'lab_mac') | list }}"
+    _first: "{{ lab_dhcp_start.split('.')[-1] | int }}"
+    _last: "{{ lab_dhcp_end.split('.')[-1] | int }}"
+    _prefix: "{{ lab_dhcp_start.rsplit('.', 1)[0] }}"
+    _dhcp_pool: "{{ range(_first | int, (_last | int) + 1) | map('string') | map('regex_replace', '^', _prefix ~ '.') | list }}"
+
+- name: Define the lab network (first run only)
+  community.libvirt.virt_net:
+    uri: "{{ libvirt_uri }}"
+    command: define
+    name: "{{ lab_network_name }}"
+    xml: "{{ lookup('ansible.builtin.template', 'network.xml.j2') }}"
+  register: _net_def
+
+- name: Read the live network definition
+  community.libvirt.virt_net:
+    uri: "{{ libvirt_uri }}"
+    command: get_xml
+    name: "{{ lab_network_name }}"
+  register: _net_xml
+  changed_when: false
+  # In --check on a fresh host the object only exists on paper.
+  when: not (ansible_check_mode and _net_def is changed)
+
+- name: Extract the settings that cannot be changed in place
+  ansible.builtin.set_fact:
+    _live_bridge: "{{ _net_xml.get_xml | regex_search(\"<bridge name='([^']+)'\", '\\1') | first }}"
+    _live_forward: "{{ _net_xml.get_xml | regex_search(\"<forward mode='([^']+)'\", '\\1') | first }}"
+    _live_ip: "{{ _net_xml.get_xml | regex_search(\"<ip address='([^']+)' netmask='([^']+)'\", '\\1', '\\2') }}"
+  # In --check on a fresh host the object only exists on paper.
+  when: not (ansible_check_mode and _net_def is changed)
+
+- name: Fail if the live network has drifted from the inventory
+  ansible.builtin.assert:
+    that:
+      - _live_bridge == lab_bridge
+      - _live_forward == 'nat'
+      - _live_ip == [lab_gateway, lab_netmask]
+    fail_msg: >-
+      Network '{{ lab_network_name }}' exists but differs from the inventory
+      (live: bridge={{ _live_bridge }}, forward={{ _live_forward }}, ip={{ _live_ip | join('/') }};
+      wanted: bridge={{ lab_bridge }}, forward=nat, ip={{ lab_gateway }}/{{ lab_netmask }}).
+      These can't be changed live. Destroy and undefine the network, then rerun.
+    quiet: true
+  # In --check on a fresh host the object only exists on paper.
+  when: not (ansible_check_mode and _net_def is changed)
+
+- name: Start the lab network
+  community.libvirt.virt_net:
+    uri: "{{ libvirt_uri }}"
+    name: "{{ lab_network_name }}"
+    state: active
+
+- name: Autostart the lab network with libvirt
+  community.libvirt.virt_net:
+    uri: "{{ libvirt_uri }}"
+    name: "{{ lab_network_name }}"
+    autostart: true
+
+- name: Keep DHCP reservations in sync with the inventory
+  community.libvirt.virt_net:
+    uri: "{{ libvirt_uri }}"
+    command: modify
+    name: "{{ lab_network_name }}"
+    xml: "<host mac='{{ hostvars[item].lab_mac }}' name='{{ item }}' ip='{{ hostvars[item].lab_ip }}'/>"
+  loop: "{{ groups['lab_vms'] }}"
